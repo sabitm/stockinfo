@@ -45,7 +45,7 @@ class _PreviewPageState extends State<PreviewPage> {
   final _profit = TextEditingController(text: '3.0');
   final _yahoo = YahooService();
 
-  int? _range = 14;
+  int? _range = 60;
   int _customDays = 45;
   bool _auto = true;
   bool _loading = true;
@@ -289,7 +289,9 @@ class _PreviewPageState extends State<PreviewPage> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '${last.close.toStringAsFixed(2)}  (${last.periodPct >= 0 ? '+' : ''}${last.periodPct.toStringAsFixed(2)}%)',
+                    last.dailyPct == null
+                        ? last.close.toStringAsFixed(2)
+                        : '${last.close.toStringAsFixed(2)}  (${last.dailyPct! >= 0 ? '+' : ''}${last.dailyPct!.toStringAsFixed(2)}%)',
                     style: Theme.of(context).textTheme.headlineSmall,
                   ),
                   const SizedBox(height: 4),
@@ -600,6 +602,28 @@ class PriceTile extends StatelessWidget {
 
   final PriceRow row;
 
+  // Dark chip backgrounds with white text for contrast on both themes.
+  Color _signalColor() {
+    if (row.dip && row.profit) return Colors.purple.shade700;
+    if (row.dip) return Colors.red.shade700;
+    return Colors.green.shade800;
+  }
+
+  String _volText() {
+    if (row.volRatio != null) {
+      final mark = row.highVol ? '*' : '';
+      return 'Vol ${row.volRatio!.toStringAsFixed(1)}x$mark';
+    }
+    if (row.volume != null) return 'Vol ${_compact(row.volume!)}';
+    return 'Vol -';
+  }
+
+  String _compact(int v) {
+    if (v >= 1000000) return '${(v / 1000000).toStringAsFixed(1)}M';
+    if (v >= 1000) return '${(v / 1000).toStringAsFixed(0)}K';
+    return '$v';
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -627,17 +651,18 @@ class PriceTile extends StatelessWidget {
         subtitle: Text(
           row.dailyPct == null
               ? 'start of period'
-              : 'daily ${row.dailyPct! >= 0 ? '+' : ''}${row.dailyPct!.toStringAsFixed(2)}%',
+              : 'period ${row.periodPct >= 0 ? '+' : ''}${row.periodPct.toStringAsFixed(2)}%  \u00b7  ${_volText()}',
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             if (row.signal.isNotEmpty)
               Chip(
-                label: Text(row.signal),
-                backgroundColor: row.dip
-                    ? Colors.red.shade100
-                    : Colors.green.shade100,
+                label: Text(
+                  row.signal,
+                  style: const TextStyle(color: Colors.white),
+                ),
+                backgroundColor: _signalColor(),
                 visualDensity: VisualDensity.compact,
               ),
             const SizedBox(width: 8),
