@@ -1,121 +1,664 @@
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import 'indicators.dart';
+import 'services/yahoo_service.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const StockApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class StockApp extends StatelessWidget {
+  const StockApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'StockInfo',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: .fromSeed(seedColor: Colors.indigo),
+        useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      darkTheme: ThemeData(
+        colorScheme: .fromSeed(
+          seedColor: Colors.indigo,
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+      ),
+      home: const PreviewPage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class PreviewPage extends StatefulWidget {
+  const PreviewPage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<PreviewPage> createState() => _PreviewPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _PreviewPageState extends State<PreviewPage> {
+  final _ticker = TextEditingController(text: 'SPUS');
+  final _dip = TextEditingController(text: '-2.0');
+  final _profit = TextEditingController(text: '3.0');
+  final _yahoo = YahooService();
 
-  void _incrementCounter() {
+  int? _range = 14;
+  int _customDays = 45;
+  bool _auto = true;
+  bool _loading = true;
+  String? _error;
+  List<RawBar> _bars = const [];
+  List<String> _reconstructed = const [];
+  bool _liveFailed = false;
+  bool _backfillFailed = false;
+  String _loadedTicker = 'SPUS';
+  int _loadId = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    _dip.dispose();
+    _profit.dispose();
+    _yahoo.close();
+    super.dispose();
+  }
+
+  int get _days => _range ?? _customDays;
+
+  String get _endDate => formatDate(todayEtDate());
+
+  String get _startDate =>
+      formatDate(todayEtDate().subtract(Duration(days: _days)));
+
+  AutoLevels get _autoLevels => autoLevels(
+    buildRows(bars: _bars, dipPct: -2.0, profitPct: 3.0),
+  );
+
+  double get _activeDip =>
+      _auto ? _autoLevels.dip : -(double.tryParse(_dip.text)?.abs() ?? 2.0);
+
+  double get _activeProfit =>
+      _auto ? _autoLevels.profit : double.tryParse(_profit.text)?.abs() ?? 3.0;
+
+  List<PriceRow> get _rows {
+    if (_bars.isEmpty) return const [];
+    return displayRows(
+      bars: _bars,
+      startDate: _startDate,
+      endDate: _endDate,
+      dipPct: _activeDip,
+      profitPct: _activeProfit,
+    );
+  }
+
+  List<String> get _shownReconstructed => _reconstructed
+      .where(
+        (d) => d.compareTo(_startDate) >= 0 && d.compareTo(_endDate) <= 0,
+      )
+      .toList();
+
+  Future<void> _load() async {
+    final id = ++_loadId;
+    final symbol = _ticker.text.trim().toUpperCase();
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      _loading = true;
+      _error = null;
     });
+    try {
+      final result = await _yahoo.load(symbol: symbol, rangeDays: _days);
+      if (!mounted || id != _loadId) return;
+      setState(() {
+        _bars = result.bars;
+        _reconstructed = result.reconstructed;
+        _liveFailed = result.liveFailed;
+        _backfillFailed = result.backfillFailed;
+        _loadedTicker = symbol;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted || id != _loadId) return;
+      setState(() {
+        _loading = false;
+        _error = _message(e);
+      });
+    }
+  }
+
+  String _message(Object error) {
+    final text = error.toString();
+    const prefix = 'Exception: ';
+    if (text.startsWith(prefix)) return text.substring(prefix.length);
+    return 'Could not load prices. Check the ticker and network, then retry.';
+  }
+
+  Future<void> _pickCustom() async {
+    final input = TextEditingController(text: '$_customDays');
+    final result = await showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Custom range'),
+        content: TextField(
+          controller: input,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          decoration: const InputDecoration(
+            labelText: 'Days (1-120)',
+            border: OutlineInputBorder(),
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final v = int.tryParse(input.text);
+              if (v == null || v < 1 || v > 120) return;
+              Navigator.pop(context, v);
+            },
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    );
+    if (result != null) {
+      setState(() {
+        _customDays = result;
+        _range = null;
+      });
+      await _load();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    final rows = _rows;
+    final scheme = Theme.of(context).colorScheme;
+    final auto = _bars.isEmpty ? const AutoLevels(-2, 3, null) : _autoLevels;
+    final last = rows.isEmpty ? null : rows.last;
+    final reconstructed = _shownReconstructed;
+
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
+      appBar: AppBar(title: const Text('StockInfo')),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _ticker,
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: const InputDecoration(
+                    labelText: 'Ticker',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  onSubmitted: (_) => _load(),
+                ),
+              ),
+              const SizedBox(width: 12),
+              FilledButton(
+                onPressed: _loading ? null : _load,
+                child: const Text('Load'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SegmentedButton<int?>(
+              segments: [
+                const ButtonSegment(value: 7, label: Text('7D')),
+                const ButtonSegment(value: 14, label: Text('14D')),
+                const ButtonSegment(value: 31, label: Text('31D')),
+                const ButtonSegment(value: 60, label: Text('60D')),
+                const ButtonSegment(value: 90, label: Text('90D')),
+                ButtonSegment(
+                  value: null,
+                  label: Text(_range == null ? '${_customDays}D' : 'Custom'),
+                ),
+              ],
+              selected: {_range},
+              onSelectionChanged: (s) {
+                final v = s.first;
+                if (v == null) {
+                  _pickCustom();
+                } else {
+                  setState(() => _range = v);
+                  _load();
+                }
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (_error != null) ...[
+            Card(
+              color: scheme.errorContainer,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_error!, style: TextStyle(color: scheme.onErrorContainer)),
+                    const SizedBox(height: 8),
+                    FilledButton(
+                      onPressed: _load,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (last != null) ...[
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        _loadedTicker,
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const SizedBox(width: 8),
+                      if (last.live)
+                        Chip(
+                          label: const Text('LIVE'),
+                          backgroundColor: scheme.primaryContainer,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${last.close.toStringAsFixed(2)}  (${last.periodPct >= 0 ? '+' : ''}${last.periodPct.toStringAsFixed(2)}%)',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _auto
+                        ? 'Levels auto: DIP ${auto.dip.toStringAsFixed(1)}%, profit +${auto.profit.toStringAsFixed(1)}%${auto.median == null ? '' : ', median move ${auto.median!.toStringAsFixed(2)}%'}'
+                        : 'Levels manual: DIP ${_activeDip.toStringAsFixed(1)}%, profit +${_activeProfit.toStringAsFixed(1)}%',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 16,
+                    runSpacing: 8,
+                    children: [
+                      _stat(context, 'MA10', last.ma10?.toStringAsFixed(2) ?? '-'),
+                      _stat(context, 'MA20', last.ma20?.toStringAsFixed(2) ?? '-'),
+                      _stat(context, 'Off high', '${last.offHighPct.toStringAsFixed(2)}%'),
+                      _stat(
+                        context,
+                        'Vol',
+                        last.volRatio == null ? '-' : '${last.volRatio!.toStringAsFixed(1)}x',
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          ],
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text('Levels', style: Theme.of(context).textTheme.titleMedium),
+                      const Spacer(),
+                      const Text('Auto'),
+                      Switch(
+                        value: _auto,
+                        onChanged: (v) => setState(() => _auto = v),
+                      ),
+                    ],
+                  ),
+                  if (!_auto)
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _dip,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              signed: true,
+                              decimal: true,
+                            ),
+                            decoration: const InputDecoration(
+                              labelText: 'DIP %',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: TextField(
+                            controller: _profit,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            decoration: const InputDecoration(
+                              labelText: 'Profit %',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (rows.isNotEmpty) ...[
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Price', style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 12),
+                  SizedBox(height: 220, child: PriceChart(rows: rows)),
+                  const SizedBox(height: 8),
+                  const LegendRow(),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          ],
+          if (_loading && rows.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 48),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else
+            ...rows.reversed.map((r) => PriceTile(row: r)),
+          if (reconstructed.isNotEmpty) ...[
+            const SizedBox(height: 8),
             Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+              'Reconstructed from 5m bars (daily close was missing): ${reconstructed.join(', ')}.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+          if (rows.any((r) => r.live)) ...[
+            const SizedBox(height: 8),
+            Text(
+              'LIVE row is provisional (last 5m price, partial volume).',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+          if (_liveFailed || _backfillFailed) ...[
+            const SizedBox(height: 8),
+            Text(
+              _liveFailed && _backfillFailed
+                  ? 'Live price and 5m backfill failed. Showing daily closes only.'
+                  : _liveFailed
+                      ? 'Live price failed. Showing daily closes only.'
+                      : '5m backfill failed. Missing daily closes stay empty.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ],
+        ),
+      ),
+    );
+  }
+
+  Widget _stat(BuildContext context, String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: Theme.of(context).textTheme.labelSmall),
+        Text(value, style: Theme.of(context).textTheme.titleMedium),
+      ],
+    );
+  }
+}
+
+class LegendRow extends StatelessWidget {
+  const LegendRow({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Wrap(
+      spacing: 16,
+      children: [
+        _Legend(color: Colors.indigo, label: 'Close'),
+        _Legend(color: Colors.teal, label: 'MA10'),
+        _Legend(color: Colors.orange, label: 'MA20'),
+      ],
+    );
+  }
+}
+
+class _Legend extends StatelessWidget {
+  const _Legend({required this.color, required this.label});
+
+  final Color color;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(width: 16, height: 3, color: color),
+        const SizedBox(width: 6),
+        Text(label),
+      ],
+    );
+  }
+}
+
+class PriceChart extends StatelessWidget {
+  const PriceChart({super.key, required this.rows});
+
+  final List<PriceRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final closes = [
+      for (var i = 0; i < rows.length; i++) FlSpot(i.toDouble(), rows[i].close),
+    ];
+    final ma10 = [
+      for (var i = 0; i < rows.length; i++)
+        if (rows[i].ma10 != null) FlSpot(i.toDouble(), rows[i].ma10!),
+    ];
+    final ma20 = [
+      for (var i = 0; i < rows.length; i++)
+        if (rows[i].ma20 != null) FlSpot(i.toDouble(), rows[i].ma20!),
+    ];
+
+    var minY = rows.first.close;
+    var maxY = rows.first.close;
+    for (final r in rows) {
+      if (r.close < minY) minY = r.close;
+      if (r.close > maxY) maxY = r.close;
+      if (r.ma10 != null && r.ma10! < minY) minY = r.ma10!;
+      if (r.ma10 != null && r.ma10! > maxY) maxY = r.ma10!;
+      if (r.ma20 != null && r.ma20! < minY) minY = r.ma20!;
+      if (r.ma20 != null && r.ma20! > maxY) maxY = r.ma20!;
+    }
+    final pad = (maxY - minY) * 0.15;
+    minY -= pad;
+    maxY += pad;
+
+    return LineChart(
+      LineChartData(
+        minX: 0,
+        maxX: (rows.length - 1).toDouble(),
+        minY: minY,
+        maxY: maxY,
+        gridData: const FlGridData(show: true, drawVerticalLine: false),
+        titlesData: FlTitlesData(
+          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 44,
+              getTitlesWidget: (v, _) => Text(
+                v.toStringAsFixed(0),
+                style: const TextStyle(fontSize: 11),
+              ),
+            ),
+          ),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              interval: (rows.length / 4).ceilToDouble(),
+              getTitlesWidget: (v, _) {
+                final i = v.round();
+                if (i < 0 || i >= rows.length) return const SizedBox.shrink();
+                return Text(
+                  rows[i].date.substring(5),
+                  style: const TextStyle(fontSize: 11),
+                );
+              },
+            ),
+          ),
+        ),
+        borderData: FlBorderData(show: false),
+        lineTouchData: LineTouchData(
+          touchTooltipData: LineTouchTooltipData(
+            getTooltipItems: (spots) => spots
+                .map(
+                  (s) => LineTooltipItem(
+                    '${rows[s.x.round()].date}\n${s.y.toStringAsFixed(2)}',
+                    const TextStyle(fontSize: 12),
+                  ),
+                )
+                .toList(),
+          ),
+        ),
+        lineBarsData: [
+          LineChartBarData(
+            spots: closes,
+            isCurved: true,
+            color: Colors.indigo,
+            barWidth: 2.5,
+            dotData: const FlDotData(show: false),
+          ),
+          if (ma10.length > 1)
+            LineChartBarData(
+              spots: ma10,
+              isCurved: true,
+              color: Colors.teal,
+              barWidth: 1.5,
+              dotData: const FlDotData(show: false),
+            ),
+          if (ma20.length > 1)
+            LineChartBarData(
+              spots: ma20,
+              isCurved: true,
+              color: Colors.orange,
+              barWidth: 1.5,
+              dotData: const FlDotData(show: false),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class PriceTile extends StatelessWidget {
+  const PriceTile({super.key, required this.row});
+
+  final PriceRow row;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final up = (row.dailyPct ?? 0) >= 0;
+    final pctColor = row.dailyPct == null
+        ? scheme.outline
+        : (up ? Colors.green.shade700 : Colors.red.shade700);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        dense: true,
+        title: Row(
+          children: [
+            Text(row.date),
+            const SizedBox(width: 8),
+            if (row.live)
+              Chip(
+                label: const Text('LIVE'),
+                backgroundColor: scheme.primaryContainer,
+                visualDensity: VisualDensity.compact,
+              ),
+          ],
+        ),
+        subtitle: Text(
+          row.dailyPct == null
+              ? 'start of period'
+              : 'daily ${row.dailyPct! >= 0 ? '+' : ''}${row.dailyPct!.toStringAsFixed(2)}%',
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (row.signal.isNotEmpty)
+              Chip(
+                label: Text(row.signal),
+                backgroundColor: row.dip
+                    ? Colors.red.shade100
+                    : Colors.green.shade100,
+                visualDensity: VisualDensity.compact,
+              ),
+            const SizedBox(width: 8),
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  row.close.toStringAsFixed(2),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                Text(
+                  row.dailyPct == null
+                      ? ''
+                      : '${row.dailyPct! >= 0 ? '+' : ''}${row.dailyPct!.toStringAsFixed(2)}%',
+                  style: TextStyle(color: pctColor, fontSize: 12),
+                ),
+              ],
             ),
           ],
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
       ),
     );
   }
