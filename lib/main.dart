@@ -716,68 +716,94 @@ class PriceTile extends StatelessWidget {
     final pctColor = row.dailyPct == null
         ? scheme.outline
         : (up ? Colors.green.shade700 : Colors.red.shade700);
+    final dailyText = row.dailyPct == null
+        ? ''
+        : '${row.dailyPct! >= 0 ? '+' : ''}${row.dailyPct!.toStringAsFixed(2)}%';
+    final periodText = row.dailyPct == null
+        ? 'start of period'
+        : 'period ${row.periodPct >= 0 ? '+' : ''}${row.periodPct.toStringAsFixed(2)}%  \u00b7  ${_volText()}';
+    final hasChips = row.signal.isNotEmpty || row.action != 'HOLD';
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        dense: true,
-        title: Row(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(row.date),
-            const SizedBox(width: 8),
-            if (row.live)
-              Chip(
-                label: const Text('LIVE'),
-                backgroundColor: scheme.primaryContainer,
-                visualDensity: VisualDensity.compact,
-              ),
-          ],
-        ),
-        subtitle: Text(
-          row.dailyPct == null
-              ? 'start of period'
-              : 'period ${row.periodPct >= 0 ? '+' : ''}${row.periodPct.toStringAsFixed(2)}%  \u00b7  ${_volText()}',
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (row.signal.isNotEmpty)
-              Chip(
-                label: Text(
-                  row.signal,
-                  style: const TextStyle(color: Colors.white),
-                ),
-                backgroundColor: _signalColor(),
-                visualDensity: VisualDensity.compact,
-              ),
-            if (row.action != 'HOLD') ...[
-              const SizedBox(width: 4),
-              Chip(
-                label: Text(
-                  row.action,
-                  style: const TextStyle(color: Colors.white),
-                ),
-                backgroundColor: _actionColor(),
-                visualDensity: VisualDensity.compact,
-              ),
-            ],
-            const SizedBox(width: 8),
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.end,
+            Row(
               children: [
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          row.date,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (row.live) ...[
+                        const SizedBox(width: 8),
+                        Chip(
+                          label: const Text('LIVE'),
+                          backgroundColor: scheme.primaryContainer,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
                 Text(
                   row.close.toStringAsFixed(2),
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    periodText,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+                const SizedBox(width: 12),
                 Text(
-                  row.dailyPct == null
-                      ? ''
-                      : '${row.dailyPct! >= 0 ? '+' : ''}${row.dailyPct!.toStringAsFixed(2)}%',
+                  dailyText,
                   style: TextStyle(color: pctColor, fontSize: 12),
                 ),
               ],
             ),
+            if (hasChips) ...[
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  if (row.signal.isNotEmpty)
+                    Chip(
+                      label: Text(
+                        row.signal,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      backgroundColor: _signalColor(),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  if (row.action != 'HOLD')
+                    Chip(
+                      label: Text(
+                        row.action,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      backgroundColor: _actionColor(),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
