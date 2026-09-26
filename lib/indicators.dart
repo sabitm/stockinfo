@@ -14,6 +14,12 @@ class RawBar {
   final bool live;
 }
 
+// Rule constants mirror ignored/prices.py.
+const pauseDays = 3;
+const shockVol = 2.0;
+const reentryVol = 1.0;
+const trendDays = 10;
+
 class PriceRow {
   const PriceRow({
     required this.date,
@@ -31,6 +37,11 @@ class PriceRow {
     this.dip = false,
     this.profit = false,
     this.live = false,
+    this.action = 'HOLD',
+    this.actionDetail = '',
+    this.shock = false,
+    this.downtrend = false,
+    this.belowMa20 = false,
   });
 
   final String date;
@@ -48,6 +59,11 @@ class PriceRow {
   final bool dip;
   final bool profit;
   final bool live;
+  final String action;
+  final String actionDetail;
+  final bool shock;
+  final bool downtrend;
+  final bool belowMa20;
 
   PriceRow copyWith({bool? dip, bool? profit}) {
     return PriceRow(
@@ -66,6 +82,11 @@ class PriceRow {
       dip: dip ?? this.dip,
       profit: profit ?? this.profit,
       live: live,
+      action: action,
+      actionDetail: actionDetail,
+      shock: shock,
+      downtrend: downtrend,
+      belowMa20: belowMa20,
     );
   }
 
@@ -128,7 +149,7 @@ List<PriceRow> displayRows({
       .toList();
   if (shown.isEmpty) return shown;
   final base = shown.first.close;
-  return [
+  final rebased = [
     for (var i = 0; i < shown.length; i++)
       PriceRow(
         date: shown[i].date,
@@ -148,10 +169,11 @@ List<PriceRow> displayRows({
         live: shown[i].live,
       ),
   ];
+  // Actions run on displayed rows only so the simulator matches the UI.
+  return addActions(rebased, dipPct: dipPct, profitPct: profitPct);
 }
 
-List<PriceRow> buildRows({
-  required List<RawBar> bars,
+List<PriceRow> buildRows({  required List<RawBar> bars,
   required double dipPct,
   required double profitPct,
 }) {
@@ -219,4 +241,195 @@ List<PriceRow> buildRows({
     );
   }
   return rows;
+}
+
+/// Fixed rule set ported from add_actions() in ignored/prices.py.
+/// Runs on displayed rows only. LIVE rows never trade.
+List<PriceRow> addActions(
+  List<PriceRow> input, {
+  required double dipPct,
+  required double profitPct,
+}) {
+  var inRally = false;
+  var pauseLeft = 0;
+  var coreBuys = 0;
+  var hasReentry = false;
+  var reentryOpen = false;
+  double? reentryPrice;
+
+  final rows = <PriceRow>[];
+  for (var i = 0; i < input.length; i++) {
+    final row = input[i];
+    final daily = row.dailyPct ?? 0.0;
+    final vol = row.volRatio;
+    final shock =
+        daily <= dipPct * 2 && vol != null && vol >= shockVol;
+    final belowMa =
+        row.ma20 != null && row.close < row.ma20!;
+    var streak = 0;
+    for (var j = i; j >= 0; j--) {
+      final prev = j == i ? row : rows[j];
+      if (prev.ma20 != null && prev.close < prev.ma20!) {
+        streak += 1;
+      } else {
+        break;
+      }
+    }
+    final downtrend = streak >= trendDays;
+    final isTake = row.profit;
+    var firstTake = false;
+    if (isTake) {
+      firstTake = !inRally;
+      inRally = true;
+    } else {
+      if (!(row.dip && row.profit)) inRally = false;
+    }
+
+    var action = 'HOLD';
+    var detail = '';
+    if (i == 0) {
+      if (row.profit) inRally = true;
+      if (row.live) detail = 'live preview, confirm at close';
+    } else if (row.live) {
+      detail = 'live preview, confirm at close';
+    } else if (shock) {
+      action = 'PAUSE';
+      detail =
+          'shock ${daily >= 0 ? '+' : ''}${daily.toStringAsFixed(2)}% on ${vol.toStringAsFixed(1)}x, no buys for $pauseDays closes';
+      pauseLeft = pauseDays;
+    } else if (pauseLeft > 0) {
+      action = 'PAUSE';
+      detail = 'cooling down ($pauseLeft left)';
+      pauseLeft -= 1;
+    } else if (reentryOpen && row.dip && !row.profit) {
+      final entry = reentryPrice;
+      final gain =
+          entry == null ? 0.0 : (row.close / entry - 1) * 100;
+      if (gain >= profitPct) {
+        detail = 're-entry up ${gain.toStringAsFixed(1)}%, holding through DIP';
+      } else {
+        action = 'CUT';
+        detail = 'bounce failed, cut re-entry on next bounce';
+        reentryOpen = false;
+        hasReentry = false;
+        reentryPrice = null;
+      }
+    } else if (isTake && firstTake && (coreBuys > 0 || hasReentry)) {
+      action = 'TAKE-PROFIT';
+      detail = 'first TAKE of rally, sell 25% once';
+    } else if (row.dip &&
+        !row.profit &&
+        !downtrend &&
+        coreBuys < 2) {
+      final calm = vol == null || vol < 1.5;
+      if (calm) {
+        action = 'BUY';
+        detail = 'calm DIP tranche ${coreBuys + 1}/2';
+        coreBuys += 1;
+      }
+    } else if (row.dip &&
+        row.profit &&
+        !hasReentry &&
+        vol != null &&
+        vol >= reentryVol) {
+      action = 'BUY';
+      detail = 'half-size re-entry on strength';
+      hasReentry = true;
+      reentryOpen = true;
+      reentryPrice = row.close;
+    }
+
+    rows.add(
+      PriceRow(
+        date: row.date,
+        close: row.close,
+        dailyPct: row.dailyPct,
+        periodPct: row.periodPct,
+        ma10: row.ma10,
+        ma20: row.ma20,
+        offHighPct: row.offHighPct,
+        upLowPct: row.upLowPct,
+        volume: row.volume,
+        vol20: row.vol20,
+        volRatio: row.volRatio,
+        highVol: row.highVol,
+        dip: row.dip,
+        profit: row.profit,
+        live: row.live,
+        action: action,
+        actionDetail: detail,
+        shock: shock,
+        downtrend: downtrend,
+        belowMa20: belowMa,
+      ),
+    );
+  }
+  return rows;
+}
+
+class SimResult {
+  const SimResult({
+    required this.cash,
+    required this.shares,
+    required this.equityUnits,
+    required this.buys,
+    required this.sells,
+    required this.lastPrice,
+  });
+
+  final double cash;
+  final double shares;
+  final double equityUnits;
+  final int buys;
+  final int sells;
+  final double lastPrice;
+}
+
+class _Lot {
+  _Lot(this.size, this.price);
+
+  final double size;
+  final double price;
+}
+
+/// Cash + position tracker ported from simulate() in ignored/prices.py.
+SimResult simulate(List<PriceRow> rows) {
+  var cash = 4.0;
+  var shares = 0.0;
+  final buys = <_Lot>[];
+  var sells = 0;
+  for (final row in rows) {
+    final price = row.close;
+    if (row.action == 'BUY') {
+      final size = row.actionDetail.contains('half-size') ? 0.5 : 1.0;
+      if (cash >= size) {
+        cash -= size;
+        shares += size / price;
+        buys.add(_Lot(size, price));
+      }
+    } else if (row.action == 'TAKE-PROFIT' && shares > 0) {
+      final qty = shares * 0.25;
+      shares -= qty;
+      cash += qty * price;
+      sells += 1;
+    } else if (row.action == 'CUT' && buys.isNotEmpty) {
+      final last = buys.removeLast();
+      var qty = last.size / last.price;
+      if (qty > shares) qty = shares;
+      shares -= qty;
+      cash += qty * price;
+      sells += 1;
+    }
+  }
+  final lastPrice = rows.isEmpty ? 0.0 : rows.last.close;
+  final equity = cash + shares * lastPrice;
+  double round2(double v) => (v * 100).round() / 100;
+  return SimResult(
+    cash: round2(cash),
+    shares: (shares * 10000).round() / 10000,
+    equityUnits: round2(equity),
+    buys: buys.length,
+    sells: sells,
+    lastPrice: lastPrice,
+  );
 }

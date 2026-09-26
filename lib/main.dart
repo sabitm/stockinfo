@@ -472,6 +472,12 @@ class _PreviewPageState extends State<PreviewPage> {
             )
           else
             ...rows.reversed.map((r) => PriceTile(row: r)),
+          if (rows.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            ActionsCard(rows: rows),
+            const SizedBox(height: 12),
+            SimCard(rows: rows),
+          ],
           if (reconstructed.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(
@@ -672,6 +678,22 @@ class PriceTile extends StatelessWidget {
     return Colors.green.shade800;
   }
 
+  // Action chips use distinct hues from signal chips.
+  Color _actionColor() {
+    switch (row.action) {
+      case 'BUY':
+        return Colors.green.shade800;
+      case 'TAKE-PROFIT':
+        return Colors.indigo.shade700;
+      case 'PAUSE':
+        return Colors.amber.shade800;
+      case 'CUT':
+        return Colors.red.shade700;
+      default:
+        return Colors.grey.shade600;
+    }
+  }
+
   String _volText() {
     if (row.volRatio != null) {
       final mark = row.highVol ? '*' : '';
@@ -728,6 +750,17 @@ class PriceTile extends StatelessWidget {
                 backgroundColor: _signalColor(),
                 visualDensity: VisualDensity.compact,
               ),
+            if (row.action != 'HOLD') ...[
+              const SizedBox(width: 4),
+              Chip(
+                label: Text(
+                  row.action,
+                  style: const TextStyle(color: Colors.white),
+                ),
+                backgroundColor: _actionColor(),
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
             const SizedBox(width: 8),
             Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -748,6 +781,111 @@ class PriceTile extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class ActionsCard extends StatelessWidget {
+  const ActionsCard({super.key, required this.rows});
+
+  final List<PriceRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final acted = rows.where((r) => r.action != 'HOLD').toList();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Actions', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            if (acted.isEmpty)
+              Text(
+                'No actions in this range. Rules only trade calm DIPs and strength re-entries.',
+                style: Theme.of(context).textTheme.bodySmall,
+              )
+            else
+              ...acted.reversed.map(
+                (r) => Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: 92,
+                        child: Text(
+                          r.date,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                      Expanded(
+                        child: Text(
+                          '${r.action} @ ${r.close.toStringAsFixed(2)} - ${r.actionDetail}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SimCard extends StatelessWidget {
+  const SimCard({super.key, required this.rows});
+
+  final List<PriceRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final sim = simulate(rows);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Simulation', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Text(
+              '4 units start. Each BUY uses 1 unit, half-size re-entry uses 0.5.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                _item(context, 'Cash', sim.cash.toStringAsFixed(2)),
+                _item(context, 'Shares', sim.shares.toStringAsFixed(4)),
+                _item(
+                  context,
+                  'Equity',
+                  '${sim.equityUnits.toStringAsFixed(2)} @ ${sim.lastPrice.toStringAsFixed(2)}',
+                ),
+                _item(context, 'Buys', '${sim.buys}'),
+                _item(context, 'Sells', '${sim.sells}'),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _item(BuildContext context, String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: Theme.of(context).textTheme.labelSmall),
+        Text(value, style: Theme.of(context).textTheme.titleMedium),
+      ],
     );
   }
 }
