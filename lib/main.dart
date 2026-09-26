@@ -773,7 +773,10 @@ class PriceTile extends StatelessWidget {
                 const SizedBox(width: 12),
                 Text(
                   dailyText,
-                  style: TextStyle(color: pctColor, fontSize: 12),
+                  style: TextStyle(
+                    color: pctColor,
+                    fontSize: Theme.of(context).textTheme.bodyMedium?.fontSize,
+                  ),
                 ),
               ],
             ),
