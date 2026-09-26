@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'indicators.dart';
 import 'services/yahoo_service.dart';
@@ -60,7 +63,55 @@ class _PreviewPageState extends State<PreviewPage> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _restoreState();
+  }
+
+  // Restore last user state so the app opens where it was left.
+  // Invalid stored values fall back to defaults.
+  Future<void> _restoreState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final ticker = prefs.getString('ticker');
+      if (ticker != null && ticker.isNotEmpty) {
+        _ticker.text = ticker;
+        _loadedTicker = ticker;
+      }
+      final range = prefs.getInt('range');
+      if (range == null || const [7, 14, 31, 60, 90].contains(range)) {
+        _range = range ?? 60;
+      }
+      final custom = prefs.getInt('customDays');
+      if (custom != null && custom >= 1 && custom <= 120) {
+        _customDays = custom;
+      }
+      _auto = prefs.getBool('auto') ?? true;
+      final dip = prefs.getString('dip');
+      if (dip != null && dip.isNotEmpty) _dip.text = dip;
+      final profit = prefs.getString('profit');
+      if (profit != null && profit.isNotEmpty) _profit.text = profit;
+    } catch (_) {
+      // Storage unavailable, keep defaults.
+    }
+    if (mounted) setState(() {});
+    await _load();
+  }
+
+  Future<void> _saveState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('ticker', _ticker.text.trim().toUpperCase());
+      if (_range == null) {
+        await prefs.remove('range');
+      } else {
+        await prefs.setInt('range', _range!);
+      }
+      await prefs.setInt('customDays', _customDays);
+      await prefs.setBool('auto', _auto);
+      await prefs.setString('dip', _dip.text);
+      await prefs.setString('profit', _profit.text);
+    } catch (_) {
+      // Storage failures must not block loading prices.
+    }
   }
 
   @override
@@ -109,6 +160,7 @@ class _PreviewPageState extends State<PreviewPage> {
   Future<void> _load() async {
     final id = ++_loadId;
     final symbol = _ticker.text.trim().toUpperCase();
+    unawaited(_saveState());
     setState(() {
       _loading = true;
       _error = null;
@@ -177,6 +229,7 @@ class _PreviewPageState extends State<PreviewPage> {
         _customDays = result;
         _range = null;
       });
+      await _saveState();
       await _load();
     }
   }
@@ -239,6 +292,7 @@ class _PreviewPageState extends State<PreviewPage> {
                   _pickCustom();
                 } else {
                   setState(() => _range = v);
+                  _saveState();
                   _load();
                 }
               },
@@ -335,7 +389,10 @@ class _PreviewPageState extends State<PreviewPage> {
                       const Text('Auto'),
                       Switch(
                         value: _auto,
-                        onChanged: (v) => setState(() => _auto = v),
+                        onChanged: (v) {
+                          setState(() => _auto = v);
+                          _saveState();
+                        },
                       ),
                     ],
                   ),
@@ -354,7 +411,10 @@ class _PreviewPageState extends State<PreviewPage> {
                               border: OutlineInputBorder(),
                               isDense: true,
                             ),
-                            onChanged: (_) => setState(() {}),
+                            onChanged: (_) {
+                              setState(() {});
+                              _saveState();
+                            },
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -369,7 +429,10 @@ class _PreviewPageState extends State<PreviewPage> {
                               border: OutlineInputBorder(),
                               isDense: true,
                             ),
-                            onChanged: (_) => setState(() {}),
+                            onChanged: (_) {
+                              setState(() {});
+                              _saveState();
+                            },
                           ),
                         ),
                       ],
