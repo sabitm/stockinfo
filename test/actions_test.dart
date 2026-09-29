@@ -144,4 +144,46 @@ void main() {
     expect(rows.last.downtrend, isTrue);
     expect(rows.last.action, 'HOLD');
   });
+
+  test('take-profit frees one core tranche slot', () {
+    // Two core buys fill slots and leave cash at 2.0. A big rally makes
+    // the 25 percent sale cover the 2.0 reserve, so the next DIP can buy.
+    // Old code never freed slots, so it gave HOLD here.
+    final rows = addActions(
+      [
+        ..._trend(n: 20, close: 100),
+        _row(date: '2026-02-01', close: 97, daily: -2.5, ma20: 99, dip: true, vol: 0.8),
+        _row(date: '2026-02-02', close: 96, daily: -1.0, ma20: 99, dip: true, vol: 0.8),
+        _row(date: '2026-02-03', close: 200, daily: 108.0, ma20: 99, profit: true, vol: 1.0),
+        _row(date: '2026-02-04', close: 97, daily: -3.0, ma20: 99, dip: true, vol: 0.8),
+      ],
+      dipPct: -2.0,
+      profitPct: 3.0,
+    );
+    expect(rows[20].action, 'BUY');
+    expect(rows[21].action, 'BUY');
+    expect(rows[22].action, 'TAKE-PROFIT');
+    expect(rows[23].action, 'BUY');
+  });
+
+  test('cash reserve blocks buys when cash runs low', () {
+    // Two buys leave cash at 2.0. A modest rally frees a slot but the
+    // sale only lifts cash to about 2.52, below the 3.0 needed for a
+    // 1.0 buy with 2.0 reserve. Slot is free, cash blocks.
+    final rows = addActions(
+      [
+        ..._trend(n: 20, close: 100),
+        _row(date: '2026-02-01', close: 97, daily: -2.5, ma20: 99, dip: true, vol: 0.8),
+        _row(date: '2026-02-02', close: 96, daily: -1.0, ma20: 99, dip: true, vol: 0.8),
+        _row(date: '2026-02-03', close: 100, daily: 4.0, ma20: 99, profit: true, vol: 1.0),
+        _row(date: '2026-02-04', close: 97, daily: -3.0, ma20: 99, dip: true, vol: 0.8),
+      ],
+      dipPct: -2.0,
+      profitPct: 3.0,
+    );
+    expect(rows[20].action, 'BUY');
+    expect(rows[21].action, 'BUY');
+    expect(rows[22].action, 'TAKE-PROFIT');
+    expect(rows[23].action, 'HOLD');
+  });
 }

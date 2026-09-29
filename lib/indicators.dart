@@ -245,6 +245,9 @@ List<PriceRow> buildRows({  required List<RawBar> bars,
 
 /// Fixed rule set ported from add_actions() in ignored/prices.py.
 /// Runs on displayed rows only. LIVE rows never trade.
+/// Tranche slots recycle: TAKE-PROFIT frees one core slot, CUT frees
+/// the re-entry slot. Cash tracker below must mirror simulate(), or
+/// BUY permission will diverge from real cash.
 List<PriceRow> addActions(
   List<PriceRow> input, {
   required double dipPct,
@@ -252,7 +255,9 @@ List<PriceRow> addActions(
 }) {
   var inRally = false;
   var pauseLeft = 0;
-  var coreBuys = 0;
+  var openCore = 0;
+  var cash = 4.0;
+  var shares = 0.0;
   var hasReentry = false;
   var reentryOpen = false;
   double? reentryPrice;
@@ -310,33 +315,48 @@ List<PriceRow> addActions(
       } else {
         action = 'CUT';
         detail = 'bounce failed, cut re-entry on next bounce';
+        final entry = reentryPrice;
+        var qty = entry == null ? 0.0 : 0.5 / entry;
+        if (qty > shares) qty = shares;
+        shares -= qty;
+        cash += qty * row.close;
         reentryOpen = false;
         hasReentry = false;
         reentryPrice = null;
       }
-    } else if (isTake && firstTake && (coreBuys > 0 || hasReentry)) {
+    } else if (isTake && firstTake && shares > 0) {
       action = 'TAKE-PROFIT';
       detail = 'first TAKE of rally, sell 25% once';
+      final qty = shares * 0.25;
+      shares -= qty;
+      cash += qty * row.close;
+      if (openCore > 0) openCore -= 1;
     } else if (row.dip &&
         !row.profit &&
         !downtrend &&
-        coreBuys < 2) {
+        openCore < 2 &&
+        cash - 1.0 >= 2.0) {
       final calm = vol == null || vol < 1.5;
       if (calm) {
         action = 'BUY';
-        detail = 'calm DIP tranche ${coreBuys + 1}/2';
-        coreBuys += 1;
+        detail = 'calm DIP tranche ${openCore + 1}/2';
+        openCore += 1;
+        cash -= 1.0;
+        shares += 1.0 / row.close;
       }
     } else if (row.dip &&
         row.profit &&
         !hasReentry &&
         vol != null &&
-        vol >= reentryVol) {
+        vol >= reentryVol &&
+        cash - 0.5 >= 2.0) {
       action = 'BUY';
       detail = 'half-size re-entry on strength';
       hasReentry = true;
       reentryOpen = true;
       reentryPrice = row.close;
+      cash -= 0.5;
+      shares += 0.5 / row.close;
     }
 
     rows.add(
