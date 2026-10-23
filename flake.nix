@@ -43,6 +43,8 @@
         pkgs.javaPackages.compiler.openjdk21
         pkgs.flutter
         pkgs.mesa-demos
+        pkgs.python3
+        pkgs.python3Packages.pillow
       ];
 
       LD_LIBRARY_PATH = libPath;
